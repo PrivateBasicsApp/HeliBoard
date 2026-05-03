@@ -13,7 +13,6 @@ import android.content.pm.ApplicationInfo;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.graphics.BitmapFactory;
-import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.view.ContextThemeWrapper;
@@ -25,8 +24,10 @@ import androidx.annotation.StringRes;
 
 import helium314.keyboard.compat.ConfigurationCompatKt;
 import helium314.keyboard.keyboard.KeyboardActionListener;
+import helium314.keyboard.keyboard.internal.PopupKeySpec;
 import helium314.keyboard.latin.AudioAndHapticFeedbackManager;
 import helium314.keyboard.latin.InputAttributes;
+import helium314.keyboard.latin.PunctuationSuggestions;
 import helium314.keyboard.latin.R;
 import helium314.keyboard.latin.RichInputMethodManager;
 import helium314.keyboard.latin.RichInputMethodSubtype;
@@ -117,6 +118,7 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
     public static final String PREF_ALWAYS_INCOGNITO_MODE = "always_incognito_mode";
     public static final String PREF_BIGRAM_PREDICTIONS = "next_word_prediction";
     public static final String PREF_SUGGEST_PUNCTUATION = "suggest_punctuation";
+    public static final String PREF_PUNCTUATION_SUGGESTIONS = "punctuation_suggestions";
     public static final String PREF_SUGGEST_CLIPBOARD_CONTENT = "suggest_clipboard_content";
     public static final String PREF_GESTURE_INPUT = "gesture_input";
     public static final String PREF_VIBRATION_DURATION_SETTINGS = "vibration_duration_settings";
@@ -154,6 +156,7 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
 
     public static final String PREF_SPACE_TO_CHANGE_LANG = "prefs_long_press_keyboard_to_change_lang";
     public static final String PREF_LANGUAGE_SWIPE_DISTANCE = "language_swipe_distance";
+    public static final String PREF_TOUCHPAD_SENSITIVITY = "touchpad_sensitivity";
 
     public static final String PREF_ENABLE_CLIPBOARD_HISTORY = "enable_clipboard_history";
     public static final String PREF_CLIPBOARD_HISTORY_RETENTION_TIME = "clipboard_history_retention_time";
@@ -201,10 +204,6 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
 
     // static cache for background images to avoid potentially slow reload on every settings reload
     private final static Drawable[] sCachedBackgroundImages = new Drawable[4];
-    private static Typeface sCachedTypeface;
-    private static boolean sCustomTypefaceLoaded; // to avoid repeatedly checking custom typeface file when there is no custom typeface
-    private static Typeface sCachedEmojiTypeface;
-    private static boolean sCustomEmojiTypefaceLoaded;
 
     private static final Settings sInstance = new Settings();
 
@@ -344,23 +343,22 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
         return ToolbarMode.valueOf(prefs.getString(PREF_TOOLBAR_MODE, Defaults.PREF_TOOLBAR_MODE));
     }
 
-    public static int readHorizontalSpaceSwipe(final SharedPreferences prefs) {
-        return switch (prefs.getString(PREF_SPACE_HORIZONTAL_SWIPE, Defaults.PREF_SPACE_HORIZONTAL_SWIPE)) {
-            case "move_cursor" -> KeyboardActionListener.SWIPE_MOVE_CURSOR;
-            case "switch_language" -> KeyboardActionListener.SWIPE_SWITCH_LANGUAGE;
-            case "toggle_numpad" -> KeyboardActionListener.SWIPE_TOGGLE_NUMPAD;
-            default -> KeyboardActionListener.SWIPE_NO_ACTION;
-        };
+    public static KeyboardActionListener.SwipeAction readHorizontalSpaceSwipe(SharedPreferences prefs) {
+        try {
+            String value = prefs.getString(PREF_SPACE_HORIZONTAL_SWIPE, Defaults.PREF_SPACE_HORIZONTAL_SWIPE);
+            return KeyboardActionListener.SwipeAction.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            return KeyboardActionListener.SwipeAction.NONE;
+        }
     }
 
-    public static int readVerticalSpaceSwipe(final SharedPreferences prefs) {
-        return switch (prefs.getString(PREF_SPACE_VERTICAL_SWIPE, Defaults.PREF_SPACE_VERTICAL_SWIPE)) {
-            case "move_cursor" -> KeyboardActionListener.SWIPE_MOVE_CURSOR;
-            case "switch_language" -> KeyboardActionListener.SWIPE_SWITCH_LANGUAGE;
-            case "toggle_numpad" -> KeyboardActionListener.SWIPE_TOGGLE_NUMPAD;
-            case "hide_keyboard" -> KeyboardActionListener.SWIPE_HIDE_KEYBOARD;
-            default -> KeyboardActionListener.SWIPE_NO_ACTION;
-        };
+    public static KeyboardActionListener.SwipeAction readVerticalSpaceSwipe(SharedPreferences prefs) {
+        try {
+            String value = prefs.getString(PREF_SPACE_VERTICAL_SWIPE, Defaults.PREF_SPACE_VERTICAL_SWIPE);
+            return KeyboardActionListener.SwipeAction.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            return KeyboardActionListener.SwipeAction.NONE;
+        }
     }
 
     public static boolean readFullscreenModeAllowed(final Resources res) {
@@ -578,32 +576,11 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
         return mPrefs.getBoolean(PREF_SAVE_SUBTYPE_PER_APP, Defaults.PREF_SAVE_SUBTYPE_PER_APP);
     }
 
-    @Nullable
-    public Typeface getCustomTypeface() {
-        if (!sCustomTypefaceLoaded) {
-            try {
-                sCachedTypeface = Typeface.createFromFile(getCustomFontFile(mContext));
-            } catch (Exception ignored) { }
-        }
-        sCustomTypefaceLoaded = true;
-        return sCachedTypeface;
-    }
-
-    @Nullable
-    public Typeface getCustomEmojiTypeface() {
-        if (!sCustomEmojiTypefaceLoaded) {
-            try {
-                sCachedEmojiTypeface = Typeface.createFromFile(getCustomEmojiFontFile(mContext));
-            } catch (Exception ignored) { }
-        }
-        sCustomEmojiTypefaceLoaded = true;
-        return sCachedEmojiTypeface;
-    }
-
-    public static void clearCachedTypeface() {
-        sCachedTypeface = null;
-        sCustomTypefaceLoaded = false;
-        sCachedEmojiTypeface = null;
-        sCustomEmojiTypefaceLoaded = false;
+    public static PunctuationSuggestions readPunctuationSuggestions(Context context) {
+        SharedPreferences prefs = KtxKt.prefs(context);
+        String[] suggestPuncsSpec = prefs.contains(PREF_PUNCTUATION_SUGGESTIONS)
+            ? prefs.getString(PREF_PUNCTUATION_SUGGESTIONS, "").split("\\s+")
+            : PopupKeySpec.splitKeySpecs(context.getString(R.string.suggested_punctuations));
+        return PunctuationSuggestions.newPunctuationSuggestions(suggestPuncsSpec);
     }
 }
